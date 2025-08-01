@@ -13,7 +13,7 @@ time_out = config.items('time')
 
 
 # 可以通过dict方法转换为字典
-time_out = dict(timeout)
+time_out = dict(time_out)
 
 # 解析APIS_URL部分
 PUBLIC_IP_APIS = []
