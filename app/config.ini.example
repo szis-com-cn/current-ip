@@ -1,0 +1,35 @@
+[feishu]
+if_post = True
+webhook = 
+user_id = 
+all_user = False
+
+[dingtalk]
+if_post = True
+webhook = 
+secret = 
+at_all = True
+
+[webhook]
+if_post = False
+webhook1 = 
+webhook2 = 
+
+[email]
+if_post = False
+smtp_host = smtp.qq.com
+smtp_port = 465
+sender_email = 
+sender_pass = 
+receiver_email = 
+
+[time]
+sleeptime = 10
+
+[APIS_URL]
+ipify = https://api.ipify.org?format=json, ipify, lambda x: x["ip"]
+ipinfo = https://ipinfo.io/json, ipinfo, lambda x: x["ip"]
+my-ip.io = https://api.my-ip.io/ip.json, my-ip.io, lambda x: x["ip_address"]
+ip.sb = https://api.ip.sb/jsonip, ip.sb, lambda x: x["ip"]
+icanhazip = https://icanhazip.com, icanhazip, lambda x: x.strip()
+

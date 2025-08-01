@@ -1,0 +1,8 @@
+services:
+  server_ip:
+    build: .
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./app/ip.txt:/app/app/ip.txt
+      - ./app/config.ini:/app/app/config.ini
