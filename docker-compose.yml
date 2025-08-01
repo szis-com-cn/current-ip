@@ -1,0 +1,6 @@
+services:
+  server_ip:
+    build: .
+    environment:
+      TZ: Asia/Shanghai
+
