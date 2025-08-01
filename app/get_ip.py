@@ -5,21 +5,10 @@ import time
 import ast
 from typing import Tuple, Optional, Dict, Any
 
-# 免费的公共 IP 查询服务列表
-'''
-PUBLIC_IP_APIS = [
-    {"url": "https://api.ipify.org?format=json", "name": "ipify", "parser": lambda x: x["ip"]},
-    {"url": "https://ipinfo.io/json", "name": "ipinfo", "parser": lambda x: x["ip"]},
-    {"url": "https://api.my-ip.io/ip.json", "name": "my-ip.io", "parser": lambda x: x["ip_address"]},
-    {"url": "https://api.ip.sb/jsonip", "name": "ip.sb", "parser": lambda x: x["ip"]},
-    {"url": "https://icanhazip.com", "name": "icanhazip", "parser": lambda x: x.strip()},
-]
-'''
-
 
 # 读取配置文件
 config = configparser.ConfigParser()
-config.read("app/config.ini", encoding="utf-8")
+config.read(".env", encoding="utf-8")
 
 # 解析APIS_URL部分
 PUBLIC_IP_APIS = []

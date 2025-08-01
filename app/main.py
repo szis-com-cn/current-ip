@@ -13,16 +13,10 @@ from webhook_post import webhook_p
 
 def send_message():
     
-    logger = logging.getLogger(__name__)
-    logger.setLevel(level = logging.INFO)
-    handler = logging.FileHandler("app/log.txt")
-    handler.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+
     
     # 获取配置文件
-    file = 'app/config.ini'
+    file = '.env'
 
     # 创建配置文件对象
     con = configparser.ConfigParser()
@@ -35,6 +29,7 @@ def send_message():
     webhook = con.items('webhook')
     email = con.items('email')
     slp_time = con.items('time')
+    file_name = con.items('file_name')
 
 
     # 可以通过dict方法转换为字典
@@ -43,11 +38,24 @@ def send_message():
     webhook = dict(webhook)
     email = dict(email)
     slp_time = dict(slp_time)
-
+    file_name = dict(file_name)
     
-    # 推送消息
-    with open('app/ip.txt', 'r') as file: 
-        old_ip = file.read()
+    #设置logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(level = logging.INFO)
+    handler = logging.FileHandler(file_name['log_file'])
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    
+    # 获取上一次的IP值
+    old_ip = ''
+    try:
+        with open(file_name['ip_file'], 'r') as file: 
+            old_ip = file.read()
+    except:
+            logger.info("文件不存在，没有获取上一次的IP值")
     
     new_ip = getip()
     
@@ -57,7 +65,7 @@ def send_message():
     else:
         # 获取上一个IP和当前IP值
         if new_ip != old_ip:
-            with open('app/ip.txt', 'w') as file: 
+            with open(file_name['ip_file'], 'w') as file: 
                 file.write(new_ip)
             
             now_time = datetime.now().strftime('%Y.%m.%d %H:%M:%S')
