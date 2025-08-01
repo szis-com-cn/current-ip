@@ -9,6 +9,11 @@ from typing import Tuple, Optional, Dict, Any
 # 读取配置文件
 config = configparser.ConfigParser()
 config.read(".env", encoding="utf-8")
+time_out = config.items('time')
+
+
+# 可以通过dict方法转换为字典
+time_out = dict(timeout)
 
 # 解析APIS_URL部分
 PUBLIC_IP_APIS = []
@@ -23,7 +28,7 @@ for key, value in config.items("APIS_URL"):
 
 
 # 请求超时时间（秒）
-TIMEOUT = 10
+TIMEOUT = int(time_out['timeout'])
 
 def get_public_ip() -> Tuple[Optional[str], Optional[str]]:
     """
