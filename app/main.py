@@ -13,8 +13,6 @@ from webhook_post import webhook_p
 
 def send_message():
     
-
-    
     # 获取配置文件
     file = '.env'
 
@@ -53,11 +51,26 @@ def send_message():
     old_ip = ''
     try:
         with open(file_name['ip_file'], 'r') as file: 
-            old_ip = file.read()
+            old_ip = file.read().strip()  # 去除可能的换行符
     except:
             logger.info("文件不存在，没有获取上一次的IP值")
     
+    # 获取当前公网IP
     new_ip = getip()
+    
+    # 检查用户是否手动修改了IP文件
+    # 重新读取IP文件，检查是否有手动修改
+    current_file_ip = ''
+    try:
+        with open(file_name['ip_file'], 'r') as file: 
+            current_file_ip = file.read().strip()  # 去除可能的换行符
+    except:
+        pass
+    
+    # 如果文件中的IP与old_ip不同，说明用户手动修改了IP文件
+    # 使用文件中的IP作为新的IP地址
+    if current_file_ip and current_file_ip != old_ip:
+        new_ip = current_file_ip
     
     if new_ip == 'null':
         logger.error("当前获取公网IP失败!!!")
@@ -70,7 +83,7 @@ def send_message():
             
             now_time = datetime.now().strftime('%Y.%m.%d %H:%M:%S')
             
-            if_post = " 飞书:" + feishu['if_post'] + " 钉钉:" + dingtalk['if_post'] + " 邮箱:" + email['if_post'] + " webhook:" + webhook['if_post']
+            if_post = "\n    飞书: " + feishu['if_post'] + "\n    钉钉: " + dingtalk['if_post'] + "\n    邮箱: " + email['if_post'] + "\n    Webhook: " + webhook['if_post']
             
             # 执行发送文本消息
             if feishu['if_post'] == 'True':
@@ -92,10 +105,11 @@ def send_message():
                 except:
                     logger.error("向邮箱发送信息失败!!!")
             if webhook['if_post'] == 'True':
-                for i in webhook.values():
-                    webhook_p(old_ip,new_ip,i,now_time,if_post)
-                    
-    print(f"sleep {slp_time["sleeptime"]} seconds")
+                # 只发送给 webhook1，避免发送给 if_post 的值
+                if 'webhook1' in webhook:
+                    webhook_p(old_ip, new_ip, webhook['webhook1'], now_time, if_post)
+                
+    print(f"sleep {slp_time['sleeptime']} seconds")
     time.sleep(int(slp_time["sleeptime"]))
 
 
