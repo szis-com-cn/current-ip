@@ -1,0 +1,32 @@
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx-data:/etc/nginx/conf.d
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - webhook
+    networks:
+      - app-network
+
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile.webhook
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./nginx-data:/etc/nginx/conf.d
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
