@@ -11,12 +11,18 @@ def webhook_p(old_ip, new_ip,webhook,now_time,if_post):
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     
-    content = "当前公网IP地址为:" + new_ip + "\n上一个公网IP地址为:" + old_ip + "\n当前时间为:" + now_time + "\n通知结果:" + if_post
+    # 将content改为字典格式
+    content = {
+        "current_ip": new_ip,
+        "previous_ip": old_ip,
+        "timestamp": now_time,
+        "notification_result": if_post
+    }
     
     try:
         response = requests.post(
             webhook,
-            json=content,
+            json=content,  # 现在传递的是字典
             timeout=5  # 设置超时时间（秒）
         )
         logger.info(f"状态码: {response.status_code}")
