@@ -83,7 +83,7 @@ def get_ip_with_retry(max_attempts: int = 3, delay: int = 2) -> Tuple[Optional[s
             time.sleep(delay)
     return None, None
 
-def getip() -> None:
+def getip():
     start_time = time.time()
     
     ip, service = get_ip_with_retry()
@@ -91,6 +91,5 @@ def getip() -> None:
     end_time = time.time()
     elapsed = end_time - start_time
     
-    result = ip
-    
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    # 直接返回IP地址，而不是JSON格式的字符串
+    return ip if ip else "null"
