@@ -1,5 +1,6 @@
 services:
   nginx:
+    container_name: ip-nginx-1  # 添加这一行
     build:
       context: .
       dockerfile: Dockerfile.nginx
@@ -14,6 +15,7 @@ services:
       - app-network
 
   webhook:
+    container_name: ip-webhook-1  # 添加这一行
     build:
       context: .
       dockerfile: Dockerfile.webhook

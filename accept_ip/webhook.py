@@ -170,7 +170,7 @@ class NginxIPManager:
         该方法首先尝试在容器内直接平滑重启Nginx，
         如果失败则使用docker restart重启整个容器
         """
-        nginx_container_name = 'ip-nginx-1'
+        nginx_container_name = 'ip-nginx-1'  # 改回这一行
         
         try:
             # 首先尝试在nginx容器内直接平滑重启Nginx
