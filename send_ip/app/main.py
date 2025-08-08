@@ -86,16 +86,17 @@ def send_message():
                 logger.info(f"Webhook检测结果: {'可用' if webhook_available else '不可用'} ({webhook_msg})")
                 webhook['if_post'] = 'True' if webhook_available else 'False'
 
+            if_post = ''
 
+            if feishu['webhook'] != '':
+                if_post = if_post + f"\n    飞书: {feishu['if_post']}"
+            if dingtalk['webhook'] != '':
+                if_post = if_post + f"\n    钉钉: {dingtalk['if_post']}"
+            if email['sender_email'] != '':
+                if_post = if_post + f"\n    邮箱: {email['if_post']}"
+            if webhook['webhook1'] != '':
+                if_post = if_post + f"\n    webhook: {webhook['if_post']}"
             
-            
-            # 消息发送逻辑保持不变...
-            if_post = (
-                f"\n    飞书: {feishu['if_post']}"
-                f"\n    钉钉: {dingtalk['if_post']}"
-                f"\n    邮箱: {email['if_post']}"
-                f"\n    Webhook: {webhook['if_post']}"
-            )
             
             if feishu['if_post'] == 'True':
                 try:
