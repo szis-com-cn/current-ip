@@ -3,14 +3,23 @@ import logging
 from logging.handlers import RotatingFileHandler
 import time
 from crypto_utils import CryptoManager
+import configparser
 
 # 全局日志配置（避免重复添加handler）
 def get_logger():
+    
+     # 配置读取、日志设置等逻辑保持不变...
+    file = '.env'
+    con = configparser.ConfigParser()
+    con.read(file, encoding='utf-8')
+
+    file_name = dict(con.items('file_name'))
+    
     logger = logging.getLogger(__name__)
     if not logger.handlers:  # 仅在没有handler时添加，避免重复日志
         logger.setLevel(logging.INFO)
         handler = RotatingFileHandler(
-            "log.txt",
+            file_name["log_file"],
             maxBytes=1024*1024*5,  # 5MB
             backupCount=3,
             encoding="utf-8"
