@@ -82,7 +82,8 @@ def send_message():
             
             # 在检测部分添加
             if 'webhook1' in webhook:  # 仅当存在webhook1时检测
-                webhook_available, webhook_msg = test_webhook_connection(webhook['webhook1'])
+                secret_key = webhook.get('secret_key', '')
+                webhook_available, webhook_msg = test_webhook_connection(webhook['webhook1'], secret_key if secret_key else None)
                 logger.info(f"Webhook检测结果: {'可用' if webhook_available else '不可用'} ({webhook_msg})")
                 webhook['if_post'] = 'True' if webhook_available else 'False'
 
@@ -133,7 +134,8 @@ def send_message():
             
             
             if webhook['if_post'] == 'True' and 'webhook1' in webhook:
-                webhook_p(old_ip, new_ip, webhook['webhook1'], now_time, if_post)
+                secret_key = webhook.get('secret_key', '')
+                webhook_p(old_ip, new_ip, webhook['webhook1'], now_time, if_post, secret_key if secret_key else None)
     
     print(f"休眠 {slp_time['sleeptime']} 秒")
     time.sleep(int(slp_time["sleeptime"]))

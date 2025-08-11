@@ -2,6 +2,7 @@ import requests
 import logging
 from logging.handlers import RotatingFileHandler
 import time
+from crypto_utils import CryptoManager
 
 # 全局日志配置（避免重复添加handler）
 def get_logger():
@@ -20,7 +21,7 @@ def get_logger():
     return logger
 
 
-def test_webhook_connection(webhook):
+def test_webhook_connection(webhook, secret_key=None):
     """测试Webhook有效性，发送特殊标识的测试请求，不干扰业务"""
     logger = get_logger()
     try:
@@ -31,9 +32,23 @@ def test_webhook_connection(webhook):
             "timestamp": str(time.time())
         }
         
+        # 如果提供了密钥，则加密测试数据
+        if secret_key:
+            crypto_manager = CryptoManager(secret_key)
+            encrypted_data = crypto_manager.encrypt_data(test_payload)
+            signature = crypto_manager.generate_signature(encrypted_data)
+            
+            final_payload = {
+                "encrypted_data": encrypted_data,
+                "signature": signature,
+                "encryption_enabled": True
+            }
+        else:
+            final_payload = test_payload
+        
         response = requests.post(
             webhook,
-            json=test_payload,
+            json=final_payload,
             timeout=8
         )
         
@@ -54,7 +69,7 @@ def test_webhook_connection(webhook):
         return False, f"测试异常: {str(e)}"
 
 
-def webhook_p(old_ip, new_ip, webhook, now_time, if_post):
+def webhook_p(old_ip, new_ip, webhook, now_time, if_post, secret_key=None):
     logger = get_logger()
     
     content = {
@@ -65,9 +80,26 @@ def webhook_p(old_ip, new_ip, webhook, now_time, if_post):
     }
     
     try:
+        # 如果提供了密钥，则加密数据
+        if secret_key:
+            crypto_manager = CryptoManager(secret_key)
+            encrypted_data = crypto_manager.encrypt_data(content)
+            signature = crypto_manager.generate_signature(encrypted_data)
+            
+            final_payload = {
+                "encrypted_data": encrypted_data,
+                "signature": signature,
+                "encryption_enabled": True
+            }
+            
+            logger.info("使用加密模式发送Webhook数据")
+        else:
+            final_payload = content
+            logger.info("使用明文模式发送Webhook数据")
+        
         response = requests.post(
             webhook,
-            json=content,
+            json=final_payload,
             timeout=5
         )
         logger.info(f"Webhook发送响应 - 状态码: {response.status_code}")

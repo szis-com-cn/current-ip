@@ -1,17 +1,52 @@
-# 使用更小的Python基础镜像
-FROM dockerproxy.slpchat.top/python:3.9-alpine
+# 使用多阶段构建优化镜像大小
+FROM python:3.11-alpine as builder
+
+# 安装构建依赖
+RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev
 
 # 设置工作目录
 WORKDIR /app
 
-# 复制 webhook.py 文件到工作目录
+# 复制requirements文件
+COPY requirements.txt .
+
+# 安装Python依赖
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# 生产阶段
+FROM python:3.11-alpine
+
+# 安装运行时依赖
+RUN apk add --no-cache docker-cli curl
+
+# 创建非root用户
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -S appuser -u 1001 -G appgroup
+
+# 设置工作目录
+WORKDIR /app
+
+# 从构建阶段复制Python包
+COPY --from=builder /root/.local /home/appuser/.local
+
+# 复制应用代码
 COPY webhook.py .
+COPY ../crypto_utils.py .
 
-# 安装所需依赖
-RUN pip install flask requests
+# 设置Python路径
+ENV PATH=/home/appuser/.local/bin:$PATH
+ENV PYTHONPATH=/app
 
-# 安装docker客户端
-RUN apk add --no-cache docker-cli
+# 更改所有权
+RUN chown -R appuser:appgroup /app
 
-# 启动命令
+# 切换到非root用户
+USER appuser
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+EXPOSE 5000
+
 CMD ["python", "webhook.py"]

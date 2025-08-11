@@ -3,6 +3,7 @@ import logging
 import re
 import os
 import subprocess
+from crypto_utils import CryptoManager
 
 # 配置日志
 logging.basicConfig(
@@ -16,6 +17,8 @@ app = Flask(__name__)
 # Nginx配置文件路径
 NGINX_CONFIG_PATH = "/etc/nginx/conf.d/allowed_ips.conf"
 
+# 从环境变量获取加密密钥
+SECRET_KEY = os.environ.get('CRYPTO_SECRET_KEY', '')
 
 class NginxIPManager:
     """Nginx IP地址管理器，用于处理IP地址更新和Nginx配置"""
@@ -29,6 +32,46 @@ class NginxIPManager:
         """
         self.nginx_config_path = config_path
         self.logger = logging.getLogger(__name__)
+        
+        # 初始化加密管理器（如果提供了密钥）
+        self.crypto_manager = None
+        if SECRET_KEY:
+            self.crypto_manager = CryptoManager(SECRET_KEY)
+            self.logger.info("加密功能已启用")
+        else:
+            self.logger.warning("未设置加密密钥，将使用明文模式")
+    
+    def decrypt_webhook_data(self, data):
+        """
+        解密Webhook数据
+        
+        Args:
+            data (dict): 接收到的数据
+            
+        Returns:
+            dict: 解密后的数据或原始数据
+        """
+        # 检查是否为加密数据
+        if isinstance(data, dict) and data.get('encryption_enabled') and 'encrypted_data' in data:
+            if not self.crypto_manager:
+                raise ValueError("接收到加密数据但未配置解密密钥")
+            
+            # 验证签名
+            encrypted_data = data['encrypted_data']
+            signature = data.get('signature', '')
+            
+            if not self.crypto_manager.verify_signature(encrypted_data, signature):
+                raise ValueError("数据签名验证失败")
+            
+            # 解密数据
+            decrypted_data = self.crypto_manager.decrypt_data(encrypted_data)
+            self.logger.info("成功解密Webhook数据")
+            return decrypted_data
+        else:
+            # 明文数据或测试数据
+            if data.get('type') == 'connection_test':
+                self.logger.info("接收到连接测试请求")
+            return data
     
     def extract_ip_from_data(self, data):
         """
@@ -42,6 +85,10 @@ class NginxIPManager:
         """
         # 如果数据是字典格式
         if isinstance(data, dict):
+            # 跳过测试请求
+            if data.get('type') == 'connection_test':
+                return None
+                
             # 优先从current_ip字段中提取新IP地址
             if 'current_ip' in data and data['current_ip']:
                 # 从current_ip字段中提取IP
@@ -170,7 +217,7 @@ class NginxIPManager:
         该方法首先尝试在容器内直接平滑重启Nginx，
         如果失败则使用docker restart重启整个容器
         """
-        nginx_container_name = 'ip-nginx-1'  # 改回这一行
+        nginx_container_name = 'ip-nginx-1'
         
         try:
             # 首先尝试在nginx容器内直接平滑重启Nginx
@@ -219,6 +266,58 @@ class NginxIPManager:
                 self.logger.error(f"重启Nginx容器时发生错误: {str(e)}")
                 return False
 
+    def get_nginx_http_status(self):
+        """
+        获取Nginx服务的HTTP状态
+        
+        Returns:
+            tuple: (status_code, error_message)
+        """
+        nginx_container_name = 'ip-nginx-1'
+        
+        try:
+            # 检查Nginx容器是否运行
+            check_result = subprocess.run(
+                ['docker', 'inspect', '--format={{.State.Status}}', nginx_container_name],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            if check_result.returncode != 0:
+                return None, f"无法检查Nginx容器状态: {check_result.stderr}"
+            
+            container_status = check_result.stdout.strip()
+            if container_status != 'running':
+                return None, f"Nginx容器未运行，当前状态: {container_status}"
+            
+            # 尝试获取Nginx状态
+            try:
+                import requests
+                response = requests.get('http://ip-nginx-1/', timeout=3)
+                return response.status_code, None
+            except ImportError:
+                # 如果没有requests库，使用curl
+                curl_result = subprocess.run(
+                    ['docker', 'exec', nginx_container_name, 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', 'http://localhost/'],
+                    capture_output=True, text=True, timeout=5
+                )
+                
+                if curl_result.returncode == 0:
+                    return int(curl_result.stdout.strip()), None
+                else:
+                    return None, f"无法获取Nginx HTTP状态: {curl_result.stderr}"
+            except Exception as e:
+                return None, f"Nginx HTTP检查失败: {str(e)}"
+                
+        except subprocess.TimeoutExpired:
+            return None, "检查Nginx状态超时"
+        except Exception as e:
+            return None, f"检查Nginx状态时发生错误: {str(e)}"
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """健康检查端点"""
+    return jsonify({"status": "healthy", "service": "webhook"}), 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -243,13 +342,33 @@ def webhook():
 
         # 处理Webhook数据
         logger.info(f"接收到的Webhook数据: {data}")
-        process_webhook_data(data)  # 调用处理函数
+        result = process_webhook_data(data)  # 获取处理结果摘要
 
-        return jsonify({'status': 'success'}), 200
+        # 附带 Nginx 的HTTP状态码
+        manager = NginxIPManager()
+        nginx_http_status, nginx_status_error = manager.get_nginx_http_status()
+
+        response_body = {
+            'status': 'success',
+            'nginx_http_status': nginx_http_status,
+            'nginx_status_error': nginx_status_error,
+        }
+        if isinstance(result, dict):
+            response_body.update(result)
+
+        return jsonify(response_body), 200
 
     except Exception as e:
         logger.error(f"处理Webhook时发生错误: {str(e)}", exc_info=True)
-        return jsonify({'status': 'error', 'message': 'internal server error'}), 500
+        # 异常情况下也尝试返回 Nginx 状态，便于排查
+        manager = NginxIPManager()
+        nginx_http_status, nginx_status_error = manager.get_nginx_http_status()
+        return jsonify({
+            'status': 'error',
+            'message': 'internal server error',
+            'nginx_http_status': nginx_http_status,
+            'nginx_status_error': nginx_status_error
+        }), 500
 
 
 def process_webhook_data(data):
@@ -257,21 +376,30 @@ def process_webhook_data(data):
     # 创建Nginx IP管理器实例
     nginx_manager = NginxIPManager()
     
-    # 提取IP地址
-    current_ip = nginx_manager.extract_ip_from_data(data)
-    
-    if current_ip:
-        logger.info(f"提取到IP地址: {current_ip}")
+    try:
+        # 解密数据（如果是加密的）
+        decrypted_data = nginx_manager.decrypt_webhook_data(data)
         
-        # 更新Nginx配置文件
-        if nginx_manager.update_nginx_config(current_ip):
-            # 重启Nginx服务
-            if nginx_manager.reload_nginx():
-                logger.info("Nginx配置已更新并成功重启")
-            else:
-                logger.error("Nginx配置已更新但重启失败")
-    else:
-        logger.warning("未能从数据中提取到IP地址")
+        # 提取IP地址
+        current_ip = nginx_manager.extract_ip_from_data(decrypted_data)
+        
+        if current_ip:
+            logger.info(f"提取到IP地址: {current_ip}")
+            
+            # 更新Nginx配置文件
+            if nginx_manager.update_nginx_config(current_ip):
+                # 重启Nginx服务
+                if nginx_manager.reload_nginx():
+                    logger.info("Nginx配置已更新并成功重启")
+                else:
+                    logger.error("Nginx配置已更新但重启失败")
+        else:
+            logger.warning("未能从数据中提取到IP地址")
+            
+    except ValueError as e:
+        logger.error(f"数据处理失败: {str(e)}")
+    except Exception as e:
+        logger.error(f"处理Webhook数据时发生未知错误: {str(e)}")
 
 
 if __name__ == '__main__':
