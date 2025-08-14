@@ -1,42 +1,151 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 import logging
 import re
 import os
 import subprocess
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
 from crypto_utils import CryptoManager
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
+
+# 创建 FastAPI 应用
+app = FastAPI(title="IP Access Control API", version="1.0.0")
+
+# 配置管理类
+class Config:
+    """配置管理类，从 .env 文件读取配置"""
+    def __init__(self):
+        # 统一密钥配置：用于加密与 API 请求头校验
+        self.CRYPTO_SECRET_KEY = os.getenv('CRYPTO_SECRET_KEY', '')
+        
+        # 日志配置
+        self.LOG_FILE = os.getenv('LOG_FILE', '/app/logs/webhook.log')
+        self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+        self.LOG_MAX_SIZE = int(os.getenv('LOG_MAX_SIZE', '10485760'))  # 10MB
+        self.LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', '5'))
+        
+        # Nginx 配置
+        self.NGINX_CONFIG_PATH = os.getenv('NGINX_CONFIG_PATH', '/etc/nginx/conf.d/allowed_ips.conf')
+        
+        # API 配置（统一密钥策略）
+        self.API_KEY_HEADER = os.getenv('API_KEY_HEADER', 'X-API-Key')
+        # 存在有效密钥则启用校验与加密，否则明文模式
+        self.REQUIRE_API_KEY = bool(self.CRYPTO_SECRET_KEY) and self.CRYPTO_SECRET_KEY != 'your_secret_key_here'
+        # API_KEY 等于 CRYPTO_SECRET_KEY（避免单独配置）
+        self.API_KEY = self.CRYPTO_SECRET_KEY if self.REQUIRE_API_KEY else ''
+
+# 初始化配置
+config = Config()
 
 # 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+def setup_logging():
+    """配置日志系统，记录到文件和控制台"""
+    # 创建日志目录
+    log_dir = os.path.dirname(config.LOG_FILE)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir, exist_ok=True)
+    
+    # 设置日志级别
+    log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.INFO)
+    
+    # 创建 logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(log_level)
+    
+    # 清除现有的 handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # 创建文件 handler（轮转日志）
+    file_handler = RotatingFileHandler(
+        config.LOG_FILE,
+        maxBytes=config.LOG_MAX_SIZE,
+        backupCount=config.LOG_BACKUP_COUNT,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(log_level)
+    
+    # 创建控制台 handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)
+    
+    # 创建格式器
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    # 添加 handlers
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
 
-app = Flask(__name__)
+# 初始化日志
+logger = setup_logging()
 
-# Nginx配置文件路径
-NGINX_CONFIG_PATH = "/etc/nginx/conf.d/allowed_ips.conf"
+# API Key 验证中间件
+async def verify_api_key(request: Request):
+    """验证 API Key"""
+    if not config.REQUIRE_API_KEY:
+        return True
+    
+    # 从请求头获取 API Key
+    api_key = request.headers.get(config.API_KEY_HEADER)
+    
+    # 如果没有提供 API Key
+    if not api_key:
+        logger.warning(f"请求缺少 API Key: {request.url}")
+        raise HTTPException(status_code=401, detail="Missing API Key")
+    
+    # 验证 API Key（使用配置的 API Key）
+    if api_key != config.API_KEY:
+        logger.warning(f"无效的 API Key: {api_key[:8]}*** from {request.client.host}")
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+    
+    logger.info(f"API Key 验证成功 from {request.client.host}")
+    return True
 
-# 从环境变量获取加密密钥
-SECRET_KEY = os.environ.get('CRYPTO_SECRET_KEY', '')
+# 数据模型
+class WebhookData(BaseModel):
+    """Webhook 数据模型"""
+    current_ip: Optional[str] = None
+    previous_ip: Optional[str] = None
+    timestamp: Optional[str] = None
+    encryption_enabled: Optional[bool] = None
+    encrypted_data: Optional[str] = None
+    signature: Optional[str] = None
+    type: Optional[str] = None
+    message: Optional[str] = None
+    text: Optional[str] = None
+    content: Optional[str] = None
+    notification_result: Optional[str] = None
 
 class NginxIPManager:
     """Nginx IP地址管理器，用于处理IP地址更新和Nginx配置"""
     
-    def __init__(self, config_path=NGINX_CONFIG_PATH):
+    def __init__(self, config_path=None):
         """
         初始化Nginx IP管理器
         
         Args:
             config_path (str): Nginx配置文件路径
         """
-        self.nginx_config_path = config_path
+        self.nginx_config_path = config_path or config.NGINX_CONFIG_PATH
         self.logger = logging.getLogger(__name__)
         
         # 初始化加密管理器（如果提供了密钥）
         self.crypto_manager = None
-        if SECRET_KEY:
-            self.crypto_manager = CryptoManager(SECRET_KEY)
+        if config.CRYPTO_SECRET_KEY:
+            self.crypto_manager = CryptoManager(config.CRYPTO_SECRET_KEY)
             self.logger.info("加密功能已启用")
         else:
             self.logger.warning("未设置加密密钥，将使用明文模式")
@@ -314,31 +423,40 @@ class NginxIPManager:
             return None, f"检查Nginx状态时发生错误: {str(e)}"
 
 
-@app.route('/health', methods=['GET'])
-def health_check():
+@app.get('/health')
+async def health_check():
     """健康检查端点"""
-    return jsonify({"status": "healthy", "service": "webhook"}), 200
+    return JSONResponse({"status": "healthy", "service": "webhook"}, status_code=200)
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
+@app.post('/webhook')
+async def webhook(request: Request):
+    """Webhook 接收端点，支持加密/明文数据，带 API Key 校验"""
     try:
-        logger.info(f"接收到请求: {request.method} {request.path}")
-        logger.info(f"请求头: {request.headers}")
-        # 验证请求方法
-        if request.method != 'POST':
-            logger.warning(f"不支持的请求方法: {request.method}")
-            return jsonify({'status': 'method not allowed'}), 405
-
+        # API Key 验证
+        await verify_api_key(request)
+        
+        logger.info(f"接收到请求: {request.method} {request.url}")
+        # 仅记录请求头键名，并对 API Key 做脱敏
+        header_names = list(request.headers.keys())
+        if config.API_KEY_HEADER in request.headers:
+            redacted = request.headers.get(config.API_KEY_HEADER)
+            if redacted:
+                redacted = redacted[:3] + '***' + redacted[-3:]
+            logger.info(f"请求头包含 {config.API_KEY_HEADER}: {bool(redacted)} ({redacted})；所有键: {header_names}")
+        else:
+            logger.info(f"请求头键名: {header_names}")
+        
         # 验证请求内容类型
-        if not request.is_json:
+        content_type = request.headers.get('content-type', '')
+        if 'application/json' not in content_type:
             logger.warning("请求内容类型不是JSON")
-            return jsonify({'status': 'invalid content type', 'expected': 'application/json'}), 415
+            raise HTTPException(status_code=415, detail="invalid content type, expected application/json")
 
         # 获取并验证JSON数据
-        data = request.json
+        data = await request.json()
         if not data:
             logger.warning("接收到空的JSON数据")
-            return jsonify({'status': 'empty json data'}), 400
+            raise HTTPException(status_code=400, detail="empty json data")
 
         # 处理Webhook数据
         logger.info(f"接收到的Webhook数据: {data}")
@@ -352,23 +470,19 @@ def webhook():
             'status': 'success',
             'nginx_http_status': nginx_http_status,
             'nginx_status_error': nginx_status_error,
+            'timestamp': datetime.utcnow().isoformat()
         }
         if isinstance(result, dict):
             response_body.update(result)
 
-        return jsonify(response_body), 200
+        return JSONResponse(response_body, status_code=200)
 
+    except HTTPException as e:
+        # 直接抛出的 HTTP 异常
+        return JSONResponse({"status": "error", "message": e.detail}, status_code=e.status_code)
     except Exception as e:
-        logger.error(f"处理Webhook时发生错误: {str(e)}", exc_info=True)
-        # 异常情况下也尝试返回 Nginx 状态，便于排查
-        manager = NginxIPManager()
-        nginx_http_status, nginx_status_error = manager.get_nginx_http_status()
-        return jsonify({
-            'status': 'error',
-            'message': 'internal server error',
-            'nginx_http_status': nginx_http_status,
-            'nginx_status_error': nginx_status_error
-        }), 500
+        logger.error(f"处理请求时发生错误: {str(e)}")
+        return JSONResponse({'status': 'error', 'message': str(e)}, status_code=500)
 
 
 def process_webhook_data(data):
@@ -403,4 +517,5 @@ def process_webhook_data(data):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=5000, log_level='info')

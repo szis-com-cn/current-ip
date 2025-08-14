@@ -31,7 +31,14 @@ def get_logger():
 
 
 def test_webhook_connection(webhook, secret_key=None):
-    """测试Webhook有效性，发送特殊标识的测试请求，不干扰业务"""
+    """
+    测试 Webhook 有效性。
+    - 当提供 secret_key 时：
+      1) 使用对称加密对测试载荷进行加密，并携带签名；
+      2) 在请求头中附带统一密钥头 X-API-Key=secret_key 以通过服务端校验。
+    - 当未提供 secret_key 时：明文发送，不附带头。
+    返回 (ok: bool, msg: str)
+    """
     logger = get_logger()
     try:
         # 发送测试专用内容，包含明确的测试标识
@@ -41,7 +48,9 @@ def test_webhook_connection(webhook, secret_key=None):
             "timestamp": str(time.time())
         }
         
-        # 如果提供了密钥，则加密测试数据
+        headers = {}
+        
+        # 如果提供了密钥，则加密测试数据并附加统一密钥请求头
         if secret_key:
             crypto_manager = CryptoManager(secret_key)
             encrypted_data = crypto_manager.encrypt_data(test_payload)
@@ -52,12 +61,14 @@ def test_webhook_connection(webhook, secret_key=None):
                 "signature": signature,
                 "encryption_enabled": True
             }
+            headers["X-API-Key"] = secret_key
         else:
             final_payload = test_payload
         
         response = requests.post(
             webhook,
             json=final_payload,
+            headers=headers if headers else None,
             timeout=8
         )
         
@@ -79,6 +90,11 @@ def test_webhook_connection(webhook, secret_key=None):
 
 
 def webhook_p(old_ip, new_ip, webhook, now_time, if_post, secret_key=None):
+    """
+    发送实际业务 Webhook。
+    - 当提供 secret_key 时，进行对称加密并附带 X-API-Key=secret_key 请求头；
+    - 当未提供 secret_key 时，按明文发送。
+    """
     logger = get_logger()
     
     content = {
@@ -89,7 +105,8 @@ def webhook_p(old_ip, new_ip, webhook, now_time, if_post, secret_key=None):
     }
     
     try:
-        # 如果提供了密钥，则加密数据
+        headers = {}
+        # 如果提供了密钥，则加密数据并附带统一密钥请求头
         if secret_key:
             crypto_manager = CryptoManager(secret_key)
             encrypted_data = crypto_manager.encrypt_data(content)
@@ -100,8 +117,8 @@ def webhook_p(old_ip, new_ip, webhook, now_time, if_post, secret_key=None):
                 "signature": signature,
                 "encryption_enabled": True
             }
-            
-            logger.info("使用加密模式发送Webhook数据")
+            headers["X-API-Key"] = secret_key
+            logger.info("使用加密模式发送Webhook数据（含X-API-Key）")
         else:
             final_payload = content
             logger.info("使用明文模式发送Webhook数据")
@@ -109,6 +126,7 @@ def webhook_p(old_ip, new_ip, webhook, now_time, if_post, secret_key=None):
         response = requests.post(
             webhook,
             json=final_payload,
+            headers=headers if headers else None,
             timeout=5
         )
         logger.info(f"Webhook发送响应 - 状态码: {response.status_code}")

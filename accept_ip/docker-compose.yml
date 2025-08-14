@@ -25,9 +25,12 @@ services:
     volumes:
       - ./nginx-data:/etc/nginx/conf.d
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./logs:/app/logs
     environment:
       TZ: Asia/Shanghai
       CRYPTO_SECRET_KEY: ${CRYPTO_SECRET_KEY:-your_secret_key_here}
+      API_KEY_HEADER: ${API_KEY_HEADER:-X-API-Key}
+      # 统一密钥策略：存在 CRYPTO_SECRET_KEY 则自动启用加密与请求头校验
     networks:
       - app-network
     restart: unless-stopped
