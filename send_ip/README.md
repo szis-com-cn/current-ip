@@ -9,24 +9,20 @@
 2. 根据实际情况修改 `.env` 中的配置项，包括IP检查间隔、API服务端口、API访问Token、各通知渠道的配置信息等。
 ```
 [feishu]
-if_post = True                 #是否开启推送
 webhook =                      #飞书群机器人webhook链接
 user_id =                      #用户ID，用于@某个用户
 all_user = False               #是否@全体成员
 
 [dingtalk]
-if_post = True                 #是否开启推送
 webhook =                      #钉钉群机器人webhook链接
 secret =                       #钉钉群机器人密钥
 at_all = True                  #是否通知全体成员  
 
 [webhook]
-if_post = False                #是否开启推送
 webhook1 =                     #第一个webhook链接
-webhook2 =                     #第二个webhook链接，不需要可删去
+secret_key =                   #加密通信密钥
 
 [email]
-if_post = False                #是否开启推送
 smtp_host = smtp.qq.com        #smtp推送服务器
 smtp_port = 465                #smtp推送端口
 sender_email =                 #发送邮件的邮箱
