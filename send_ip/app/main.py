@@ -5,13 +5,23 @@ import configparser
 import time
 import logging
 from datetime import datetime
-from get_ip import getip
-from feishu_bot import sendfeishu, test_feishu_connection
-from send_email import mail, test_email_connection
-from dingtalk_bot import dingtalk_robot, test_dingtalk_connection
-from webhook_post import webhook_p, test_webhook_connection
+from .get_ip import getip
+from .feishu_bot import sendfeishu, test_feishu_connection
+from .send_email import mail, test_email_connection
+from .dingtalk_bot import dingtalk_robot, test_dingtalk_connection
+from .webhook_post import webhook_p, test_webhook_connection
 
-def send_message():
+# 添加ASGI相关依赖
+from fastapi import FastAPI
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncio
+
+# 创建FastAPI应用
+app = FastAPI()
+scheduler = AsyncIOScheduler()
+
+# 保留原send_message函数，但改为异步
+async def send_message():
     # 配置读取、日志设置等逻辑保持不变...
     file = '.env'
     con = configparser.ConfigParser()
@@ -138,8 +148,22 @@ def send_message():
                 webhook_p(old_ip, new_ip, webhook['webhook1'], now_time, if_post, secret_key if secret_key else None)
     
     print(f"休眠 {slp_time['sleeptime']} 秒")
-    time.sleep(int(slp_time["sleeptime"]))
+    # 将time.sleep改为异步等待
+    await asyncio.sleep(int(slp_time["sleeptime"]))
 
+# 应用启动时添加定时任务
+@app.on_event('startup')
+def startup_event():
+    # 从配置读取休眠时间 (假设配置文件中有此设置)
+    config = configparser.ConfigParser()
+    config.read('.env', encoding='utf')
+    sleep_time = int(config.get('time', 'sleeptime', fallback=3600))
+    
+    # 添加定时任务，每隔指定时间执行一次
+    scheduler.add_job(send_message, 'interval', seconds=sleep_time)
+    scheduler.start()
 
-while True:
-    send_message()
+# 添加健康检查接口
+@app.get('/')
+def health_check():
+    return {"status": "running"}
