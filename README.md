@@ -4,5 +4,3 @@
 - [新思开源](https://gitea.szis.dev/szisos/current-ip)
 - [Github](https://github.com/szis-com-cn/current-ip)
 - [Gitee](https://gitee.com/szis-os/current-ip)
-
----

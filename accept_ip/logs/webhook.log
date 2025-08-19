@@ -1,0 +1,4 @@
+2025-08-19 14:20:17,839 - webhook - INFO - 成功加载 0 个现有 IP 配置
+2025-08-19 14:20:17,839 - webhook - INFO - 健康检查 - 外部Nginx状态: command - 使用自定义命令重载方式 (docker exec nginx-global-gateway nginx -s reload)
+2025-08-19 14:20:47,922 - webhook - INFO - 成功加载 0 个现有 IP 配置
+2025-08-19 14:20:47,923 - webhook - INFO - 健康检查 - 外部Nginx状态: command - 使用自定义命令重载方式 (docker exec nginx-global-gateway nginx -s reload)

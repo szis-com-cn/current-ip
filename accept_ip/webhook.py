@@ -8,7 +8,6 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-from crypto_utils import CryptoManager
 from dotenv import load_dotenv
 
 # 加载 .env 文件
@@ -21,9 +20,6 @@ app = FastAPI(title="IP Access Control API", version="1.0.0")
 class Config:
     """配置管理类，从 .env 文件读取配置"""
     def __init__(self):
-        # 统一密钥配置：用于加密与 API 请求头校验
-        self.CRYPTO_SECRET_KEY = os.getenv('CRYPTO_SECRET_KEY', '')
-        
         # 日志配置
         self.LOG_FILE = os.getenv('LOG_FILE', '/app/logs/webhook.log')
         self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -32,87 +28,79 @@ class Config:
         
         # Nginx 配置
         self.NGINX_CONFIG_PATH = os.getenv('NGINX_CONFIG_PATH', '/etc/nginx/conf.d/allowed_ips.conf')
-        
-        # API 配置（统一密钥策略）
-        self.API_KEY_HEADER = os.getenv('API_KEY_HEADER', 'X-API-Key')
-        # 存在有效密钥则启用校验与加密，否则明文模式
-        self.REQUIRE_API_KEY = bool(self.CRYPTO_SECRET_KEY) and self.CRYPTO_SECRET_KEY != 'your_secret_key_here'
-        # API_KEY 等于 CRYPTO_SECRET_KEY（避免单独配置）
-        self.API_KEY = self.CRYPTO_SECRET_KEY if self.REQUIRE_API_KEY else ''
+        self.NGINX_RELOAD_METHOD = os.getenv('NGINX_RELOAD_METHOD', 'external')  # container|external|command
+        self.NGINX_CONTAINER_NAME = os.getenv('NGINX_CONTAINER_NAME', 'nginx')
+        self.NGINX_RELOAD_COMMAND = os.getenv('NGINX_RELOAD_COMMAND', 'nginx -s reload')
 
 # 初始化配置
 config = Config()
 
-# 配置日志
-def setup_logging():
-    """配置日志系统，记录到文件和控制台"""
-    # 创建日志目录
-    log_dir = os.path.dirname(config.LOG_FILE)
-    if log_dir and not os.path.exists(log_dir):
-        os.makedirs(log_dir, exist_ok=True)
+# 日志设置
+def get_logger(name: str) -> logging.Logger:
+    """获取配置好的 logger"""
+    logger = logging.getLogger(name)
+    logger.setLevel(getattr(logging, config.LOG_LEVEL))
     
-    # 设置日志级别
-    log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.INFO)
-    
-    # 创建 logger
-    logger = logging.getLogger(__name__)
-    logger.setLevel(log_level)
-    
-    # 清除现有的 handlers
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-    
-    # 创建文件 handler（轮转日志）
-    file_handler = RotatingFileHandler(
-        config.LOG_FILE,
-        maxBytes=config.LOG_MAX_SIZE,
-        backupCount=config.LOG_BACKUP_COUNT,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(log_level)
-    
-    # 创建控制台 handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    
-    # 创建格式器
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
-    
-    # 添加 handlers
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    if not logger.handlers:
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        # 创建日志目录
+        os.makedirs(os.path.dirname(config.LOG_FILE), exist_ok=True)
+        
+        # 文件处理器
+        file_handler = RotatingFileHandler(
+            config.LOG_FILE,
+            maxBytes=config.LOG_MAX_SIZE,
+            backupCount=config.LOG_BACKUP_COUNT
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
     
     return logger
 
-# 初始化日志
-logger = setup_logging()
+logger = get_logger(__name__)
 
-# API Key 验证中间件
-async def verify_api_key(request: Request):
-    """验证 API Key"""
-    if not config.REQUIRE_API_KEY:
-        return True
+class IPWhitelistManager:
+    """IP 白名单数据模型"""
+    def __init__(self):
+        self.allowed_ips = set()
     
-    # 从请求头获取 API Key
-    api_key = request.headers.get(config.API_KEY_HEADER)
+    def add_ip(self, ip: str) -> bool:
+        """
+        添加 IP 到白名单
+        Args:
+            ip: 要添加的 IP 地址
+        Returns:
+            bool: 是否成功添加
+        """
+        if self._is_valid_ip(ip):
+            self.allowed_ips.add(ip)
+            return True
+        return False
     
-    # 如果没有提供 API Key
-    if not api_key:
-        logger.warning(f"请求缺少 API Key: {request.url}")
-        raise HTTPException(status_code=401, detail="Missing API Key")
+    def remove_ip(self, ip: str) -> bool:
+        """
+        从白名单移除 IP
+        Args:
+            ip: 要移除的 IP 地址
+        Returns:
+            bool: 是否成功移除
+        """
+        if ip in self.allowed_ips:
+            self.allowed_ips.remove(ip)
+            return True
+        return False
     
-    # 验证 API Key（使用配置的 API Key）
-    if api_key != config.API_KEY:
-        logger.warning(f"无效的 API Key: {api_key[:8]}*** from {request.client.host}")
-        raise HTTPException(status_code=403, detail="Invalid API Key")
+    def get_ips(self) -> list:
+        """获取所有白名单 IP"""
+        return sorted(list(self.allowed_ips))
     
-    logger.info(f"API Key 验证成功 from {request.client.host}")
-    return True
+    def _is_valid_ip(self, ip: str) -> bool:
+        """验证 IP 格式"""
+        pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+        return bool(re.match(pattern, ip))
 
 # 数据模型
 class WebhookData(BaseModel):
@@ -120,9 +108,6 @@ class WebhookData(BaseModel):
     current_ip: Optional[str] = None
     previous_ip: Optional[str] = None
     timestamp: Optional[str] = None
-    encryption_enabled: Optional[bool] = None
-    encrypted_data: Optional[str] = None
-    signature: Optional[str] = None
     type: Optional[str] = None
     message: Optional[str] = None
     text: Optional[str] = None
@@ -141,46 +126,23 @@ class NginxIPManager:
         """
         self.nginx_config_path = config_path or config.NGINX_CONFIG_PATH
         self.logger = logging.getLogger(__name__)
-        
-        # 初始化加密管理器（如果提供了密钥）
-        self.crypto_manager = None
-        if config.CRYPTO_SECRET_KEY:
-            self.crypto_manager = CryptoManager(config.CRYPTO_SECRET_KEY)
-            self.logger.info("加密功能已启用")
-        else:
-            self.logger.warning("未设置加密密钥，将使用明文模式")
+        self.whitelist_manager = IPWhitelistManager()
+        self._load_existing_ips()
     
-    def decrypt_webhook_data(self, data):
-        """
-        解密Webhook数据
-        
-        Args:
-            data (dict): 接收到的数据
-            
-        Returns:
-            dict: 解密后的数据或原始数据
-        """
-        # 检查是否为加密数据
-        if isinstance(data, dict) and data.get('encryption_enabled') and 'encrypted_data' in data:
-            if not self.crypto_manager:
-                raise ValueError("接收到加密数据但未配置解密密钥")
-            
-            # 验证签名
-            encrypted_data = data['encrypted_data']
-            signature = data.get('signature', '')
-            
-            if not self.crypto_manager.verify_signature(encrypted_data, signature):
-                raise ValueError("数据签名验证失败")
-            
-            # 解密数据
-            decrypted_data = self.crypto_manager.decrypt_data(encrypted_data)
-            self.logger.info("成功解密Webhook数据")
-            return decrypted_data
-        else:
-            # 明文数据或测试数据
-            if data.get('type') == 'connection_test':
-                self.logger.info("接收到连接测试请求")
-            return data
+    def _load_existing_ips(self):
+        """加载现有的 IP 配置"""
+        try:
+            if os.path.exists(self.nginx_config_path):
+                with open(self.nginx_config_path, 'r') as f:
+                    content = f.read()
+                    # 解析现有的 IP 配置
+                    ip_pattern = r'allow\s+(\d+\.\d+\.\d+\.\d+);'
+                    ips = re.findall(ip_pattern, content)
+                    for ip in ips:
+                        self.whitelist_manager.add_ip(ip)
+                self.logger.info(f"成功加载 {len(ips)} 个现有 IP 配置")
+        except Exception as e:
+            self.logger.error(f"加载现有 IP 配置失败: {e}")
     
     def extract_ip_from_data(self, data):
         """
@@ -202,6 +164,24 @@ class NginxIPManager:
             if 'current_ip' in data and data['current_ip']:
                 # 从current_ip字段中提取IP
                 ip_value = data['current_ip']
+                # 如果IP值是字符串类型，需要去除引号和换行符
+                if isinstance(ip_value, str):
+                    # 去除首尾的空白字符（包括换行符）
+                    ip_value = ip_value.strip()
+                    # 去除首尾的双引号
+                    ip_value = ip_value.strip('"')
+                    # 去除首尾的单引号
+                    ip_value = ip_value.strip("'")
+                
+                # 验证IP地址格式
+                ip_pattern = r'^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+                if re.match(ip_pattern, ip_value):
+                    return ip_value
+            
+            # 尝试从ip字段中提取IP地址
+            elif 'ip' in data and data['ip']:
+                # 从ip字段中提取IP
+                ip_value = data['ip']
                 # 如果IP值是字符串类型，需要去除引号和换行符
                 if isinstance(ip_value, str):
                     # 去除首尾的空白字符（包括换行符）
@@ -312,6 +292,9 @@ class NginxIPManager:
         
         # 写入配置文件
         try:
+            # 确保配置目录存在
+            os.makedirs(os.path.dirname(self.nginx_config_path), exist_ok=True)
+            
             with open(self.nginx_config_path, 'w') as f:
                 f.write(config_content)
             self.logger.info(f"已更新Nginx配置文件，添加IP: {new_ip}")
@@ -322,129 +305,112 @@ class NginxIPManager:
     
     def reload_nginx(self):
         """
-        平滑重启Nginx服务
-        该方法首先尝试在容器内直接平滑重启Nginx，
-        如果失败则使用docker restart重启整个容器
+        根据配置的方法重载Nginx服务
         """
-        nginx_container_name = 'ip-nginx-1'
+        try:
+            if config.NGINX_RELOAD_METHOD == 'container':
+                return self._reload_nginx_container()
+            elif config.NGINX_RELOAD_METHOD == 'command':
+                return self._reload_nginx_command()
+            elif config.NGINX_RELOAD_METHOD == 'external':
+                self.logger.info("使用外部Nginx容器模式重载")
+                return self._reload_nginx_container()
+            else:
+                self.logger.error(f"不支持的Nginx重载方法: {config.NGINX_RELOAD_METHOD}")
+                return False
+        except Exception as e:
+            self.logger.error(f"重载Nginx时发生错误: {str(e)}")
+            return False
+    
+    def _reload_nginx_container(self):
+        """通过Docker容器重载Nginx"""
+        nginx_container_name = config.NGINX_CONTAINER_NAME
         
         try:
-            # 首先尝试在nginx容器内直接平滑重启Nginx
-            self.logger.info("尝试在容器内平滑重启Nginx")
-            
             # 检查Nginx配置文件是否正确
-            check_result = subprocess.run(['docker', 'exec', nginx_container_name, 'nginx', '-t'], 
-                                        capture_output=True, text=True, timeout=10)
+            check_result = subprocess.run([
+                'docker', 'exec', nginx_container_name, 'nginx', '-t'
+            ], capture_output=True, text=True, timeout=10)
             
             if check_result.returncode != 0:
                 self.logger.error(f"Nginx配置文件检查失败: {check_result.stderr}")
                 return False
             
             # 在容器内平滑重启Nginx
-            reload_result = subprocess.run(['docker', 'exec', nginx_container_name, 'nginx', '-s', 'reload'], 
-                                         capture_output=True, text=True, timeout=10)
+            reload_result = subprocess.run([
+                'docker', 'exec', nginx_container_name, 'nginx', '-s', 'reload'
+            ], capture_output=True, text=True, timeout=10)
             
             if reload_result.returncode == 0:
                 self.logger.info("Nginx服务已平滑重启")
                 return True
             else:
-                self.logger.warning(f"容器内平滑重启失败: {reload_result.stderr}")
+                self.logger.error(f"容器内平滑重启失败: {reload_result.stderr}")
+                return False
                 
         except subprocess.TimeoutExpired:
-            self.logger.warning("容器内Nginx重启超时")
+            self.logger.error("容器内Nginx重启超时")
+            return False
         except Exception as e:
-            self.logger.warning(f"容器内重启Nginx时发生错误: {str(e)}")
-            
-            # 如果容器内重启失败，则使用docker restart重启整个容器
-            try:
-                self.logger.info("尝试重启整个Nginx容器")
-                restart_result = subprocess.run(['docker', 'restart', nginx_container_name], 
-                                              capture_output=True, text=True, timeout=30)
-                
-                if restart_result.returncode == 0:
-                    self.logger.info("Nginx容器已重启")
-                    return True
-                else:
-                    self.logger.error(f"Nginx容器重启失败: {restart_result.stderr}")
-                    return False
-                    
-            except subprocess.TimeoutExpired:
-                self.logger.error("Nginx容器重启超时")
-                return False
-            except Exception as e:
-                self.logger.error(f"重启Nginx容器时发生错误: {str(e)}")
-                return False
-
-    def get_nginx_http_status(self):
-        """
-        获取Nginx服务的HTTP状态
-        
-        Returns:
-            tuple: (status_code, error_message)
-        """
-        nginx_container_name = 'ip-nginx-1'
-        
+            self.logger.error(f"容器内重启Nginx时发生错误: {str(e)}")
+            return False
+    
+    def _reload_nginx_command(self):
+        """通过自定义命令重载Nginx"""
         try:
-            # 检查Nginx容器是否运行
-            check_result = subprocess.run(
-                ['docker', 'inspect', '--format={{.State.Status}}', nginx_container_name],
-                capture_output=True, text=True, timeout=5
+            reload_result = subprocess.run(
+                config.NGINX_RELOAD_COMMAND.split(),
+                capture_output=True, text=True, timeout=10
             )
             
-            if check_result.returncode != 0:
-                return None, f"无法检查Nginx容器状态: {check_result.stderr}"
-            
-            container_status = check_result.stdout.strip()
-            if container_status != 'running':
-                return None, f"Nginx容器未运行，当前状态: {container_status}"
-            
-            # 尝试获取Nginx状态
-            try:
-                import requests
-                response = requests.get('http://ip-nginx-1/', timeout=3)
-                return response.status_code, None
-            except ImportError:
-                # 如果没有requests库，使用curl
-                curl_result = subprocess.run(
-                    ['docker', 'exec', nginx_container_name, 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', 'http://localhost/'],
-                    capture_output=True, text=True, timeout=5
-                )
-                
-                if curl_result.returncode == 0:
-                    return int(curl_result.stdout.strip()), None
-                else:
-                    return None, f"无法获取Nginx HTTP状态: {curl_result.stderr}"
-            except Exception as e:
-                return None, f"Nginx HTTP检查失败: {str(e)}"
+            if reload_result.returncode == 0:
+                self.logger.info(f"Nginx重载成功: {config.NGINX_RELOAD_COMMAND}")
+                return True
+            else:
+                self.logger.error(f"Nginx重载失败: {reload_result.stderr}")
+                return False
                 
         except subprocess.TimeoutExpired:
-            return None, "检查Nginx状态超时"
+            self.logger.error("Nginx重载命令超时")
+            return False
         except Exception as e:
-            return None, f"检查Nginx状态时发生错误: {str(e)}"
+            self.logger.error(f"执行Nginx重载命令时发生错误: {str(e)}")
+            return False
+
+    def get_nginx_status(self):
+        """获取Nginx服务状态信息 - 仅显示重载方式信息"""
+        if config.NGINX_RELOAD_METHOD == 'external':
+            return {'status': 'external', 'message': f'使用外部Nginx服务 ({config.NGINX_CONTAINER_NAME})'}
+        
+        if config.NGINX_RELOAD_METHOD == 'container':
+            return {'status': 'container', 'message': f'使用容器重载方式 ({config.NGINX_CONTAINER_NAME})'}
+        
+        # 对于command方法
+        return {'status': 'command', 'message': f'使用自定义命令重载方式 ({config.NGINX_RELOAD_COMMAND})'}
 
 
 @app.get('/health')
 async def health_check():
     """健康检查端点"""
-    return JSONResponse({"status": "healthy", "service": "webhook"}, status_code=200)
+    # 获取Nginx状态信息
+    manager = NginxIPManager()
+    nginx_status = manager.get_nginx_status()
+    
+    # 记录Nginx状态信息到日志
+    logger.info(f"健康检查 - 外部Nginx状态: {nginx_status['status']} - {nginx_status['message']}")
+    
+    return JSONResponse({
+        "status": "healthy", 
+        "service": "webhook",
+        "nginx_status": nginx_status,
+        "timestamp": datetime.utcnow().isoformat()
+    }, status_code=200)
 
 @app.post('/webhook')
 async def webhook(request: Request):
-    """Webhook 接收端点，支持加密/明文数据，带 API Key 校验"""
+    """Webhook 接收端点，处理明文数据"""
     try:
-        # API Key 验证
-        await verify_api_key(request)
-        
         logger.info(f"接收到请求: {request.method} {request.url}")
-        # 仅记录请求头键名，并对 API Key 做脱敏
-        header_names = list(request.headers.keys())
-        if config.API_KEY_HEADER in request.headers:
-            redacted = request.headers.get(config.API_KEY_HEADER)
-            if redacted:
-                redacted = redacted[:3] + '***' + redacted[-3:]
-            logger.info(f"请求头包含 {config.API_KEY_HEADER}: {bool(redacted)} ({redacted})；所有键: {header_names}")
-        else:
-            logger.info(f"请求头键名: {header_names}")
         
         # 验证请求内容类型
         content_type = request.headers.get('content-type', '')
@@ -460,16 +426,18 @@ async def webhook(request: Request):
 
         # 处理Webhook数据
         logger.info(f"接收到的Webhook数据: {data}")
-        result = process_webhook_data(data)  # 获取处理结果摘要
+        result = process_webhook_data(data)
 
-        # 附带 Nginx 的HTTP状态码
+        # 获取Nginx状态信息
         manager = NginxIPManager()
-        nginx_http_status, nginx_status_error = manager.get_nginx_http_status()
+        nginx_status = manager.get_nginx_status()
+        
+        # 记录Nginx状态信息到日志
+        logger.info(f"外部Nginx状态: {nginx_status['status']} - {nginx_status['message']}")
 
         response_body = {
             'status': 'success',
-            'nginx_http_status': nginx_http_status,
-            'nginx_status_error': nginx_status_error,
+            'nginx_status': nginx_status,
             'timestamp': datetime.utcnow().isoformat()
         }
         if isinstance(result, dict):
@@ -491,29 +459,43 @@ def process_webhook_data(data):
     nginx_manager = NginxIPManager()
     
     try:
-        # 解密数据（如果是加密的）
-        decrypted_data = nginx_manager.decrypt_webhook_data(data)
+        # 跳过测试请求，不记录警告
+        if isinstance(data, dict) and data.get('type') == 'connection_test':
+            return {'message': '连接测试请求，已跳过处理'}
         
-        # 提取IP地址
-        current_ip = nginx_manager.extract_ip_from_data(decrypted_data)
+        # 提取IP地址（明文处理）
+        current_ip = nginx_manager.extract_ip_from_data(data)
         
         if current_ip:
             logger.info(f"提取到IP地址: {current_ip}")
             
             # 更新Nginx配置文件
             if nginx_manager.update_nginx_config(current_ip):
+                # 获取并记录当前Nginx状态
+                nginx_status = nginx_manager.get_nginx_status()
+                logger.info(f"配置更新后 - 外部Nginx状态: {nginx_status['status']} - {nginx_status['message']}")
+                
                 # 重启Nginx服务
                 if nginx_manager.reload_nginx():
-                    logger.info("Nginx配置已更新并成功重启")
+                    # 重载后再次检查状态
+                    nginx_status_after = nginx_manager.get_nginx_status()
+                    logger.info(f"Nginx重载后状态: {nginx_status_after['status']} - {nginx_status_after['message']}")
+                    return {'ip_added': current_ip, 'nginx_reloaded': True}
                 else:
                     logger.error("Nginx配置已更新但重启失败")
+                    # 记录重载失败后的状态
+                    nginx_status_failed = nginx_manager.get_nginx_status()
+                    logger.error(f"重载失败后 - 外部Nginx状态: {nginx_status_failed['status']} - {nginx_status_failed['message']}")
+                    return {'ip_added': current_ip, 'nginx_reloaded': False}
+            else:
+                return {'message': f'IP {current_ip} 已存在，无需更新'}
         else:
             logger.warning("未能从数据中提取到IP地址")
+            return {'message': '未能从数据中提取到IP地址'}
             
-    except ValueError as e:
-        logger.error(f"数据处理失败: {str(e)}")
     except Exception as e:
-        logger.error(f"处理Webhook数据时发生未知错误: {str(e)}")
+        logger.error(f"处理Webhook数据时发生错误: {str(e)}")
+        return {'error': str(e)}
 
 
 if __name__ == '__main__':
