@@ -1,17 +1,52 @@
-# 使用更小的Python基础镜像
-FROM dockerproxy.slpchat.top/python:3.9-alpine
+# 使用多阶段构建优化镜像大小
+FROM python:3.11-alpine as builder
+
+# 安装构建依赖
+RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev
 
 # 设置工作目录
 WORKDIR /app
 
-# 复制 webhook.py 文件到工作目录
+# 复制requirements文件
+COPY requirements.txt .
+
+# 安装Python依赖
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# 生产阶段
+FROM python:3.11-alpine
+
+# 安装运行时依赖
+RUN apk add --no-cache docker-cli curl
+
+# 创建非root用户
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -S appuser -u 1001 -G appgroup
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制依赖并在运行时安装，确保 uvicorn 等可用
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制应用代码
 COPY webhook.py .
+COPY crypto_utils.py .
 
-# 安装所需依赖
-RUN pip install flask requests
+# 设置Python路径
+ENV PYTHONPATH=/app
 
-# 安装docker客户端
-RUN apk add --no-cache docker-cli
+# 更改所有权
+RUN chown -R appuser:appgroup /app
 
-# 启动命令
-CMD ["python", "webhook.py"]
+# 切换到 root 用户，确保可访问 docker.sock 进行 Nginx 重载
+USER root
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+EXPOSE 5000
+
+CMD ["uvicorn", "webhook:app", "--host", "0.0.0.0", "--port", "5000", "--log-level", "info"]

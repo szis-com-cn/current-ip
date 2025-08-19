@@ -3,4 +3,6 @@ services:
     build: .
     environment:
       TZ: Asia/Shanghai
+    volumes:
+      - ./logs:/app/logs
 
