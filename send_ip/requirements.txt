@@ -1,3 +1,7 @@
 requests
 DingtalkChatbot
-cryptography==41.0.7
+cryptography
+uvicorn
+fastapi
+apscheduler
+crypto_utils

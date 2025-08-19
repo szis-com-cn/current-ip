@@ -2,7 +2,7 @@ import requests
 import logging
 from logging.handlers import RotatingFileHandler
 import time
-from crypto_utils import CryptoManager
+from .crypto_utils import CryptoManager
 import configparser
 
 # 全局日志配置（避免重复添加handler）
