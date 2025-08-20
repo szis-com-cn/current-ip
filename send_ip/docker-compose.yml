@@ -3,8 +3,18 @@ services:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       TZ: Asia/Shanghai
     volumes:
       - ./logs:/app/logs
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    external: true
+    name: accept_ip_app-network
 
