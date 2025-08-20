@@ -72,12 +72,12 @@ async def send_message():
             # 飞书测试（无消息）
             feishu_available = test_feishu_connection(feishu['webhook'])
             logger.info(f"飞书检测结果: {'可用' if feishu_available else '不可用'}")
-            feishu['if_post'] = 'True' if feishu_available else 'False'
+            feishu['if_post'] = '成功' if feishu_available else '失败'
             
             # 钉钉测试（无消息）
             dingtalk_available = test_dingtalk_connection(dingtalk['webhook'], dingtalk['secret'])
             logger.info(f"钉钉检测结果: {'可用' if dingtalk_available else '不可用'}")
-            dingtalk['if_post'] = 'True' if dingtalk_available else 'False'
+            dingtalk['if_post'] = '成功' if dingtalk_available else '失败'
             
             # 在邮件检测部分修改
             # 注意：smtp_port需要转为整数（配置文件可能读为字符串）
@@ -88,35 +88,35 @@ async def send_message():
                 int(email["smtp_port"])  # 关键：端口必须为整数
             )
             logger.info(f"邮件检测结果: {'可用' if email_available else '不可用'} ({email_msg})")
-            email['if_post'] = 'True' if email_available else 'False'
+            email['if_post'] = '成功' if email_available else '失败'
             
             # 在检测部分添加
             if 'webhook1' in webhook:  # 仅当存在webhook1时检测
                 secret_key = webhook.get('secret_key', '')
                 webhook_available, webhook_msg = test_webhook_connection(webhook['webhook1'], secret_key if secret_key else None)
                 logger.info(f"Webhook检测结果: {'可用' if webhook_available else '不可用'} ({webhook_msg})")
-                webhook['if_post'] = 'True' if webhook_available else 'False'
+                webhook['if_post'] = '成功' if webhook_available else '失败'
 
             if_post = ''
 
             if feishu['webhook'] != '':
-                if_post = if_post + f"\n    飞书: {feishu['if_post']}"
+                if_post = if_post + f"\n飞书: {feishu['if_post']}"
             if dingtalk['webhook'] != '':
-                if_post = if_post + f"\n    钉钉: {dingtalk['if_post']}"
+                if_post = if_post + f"\n钉钉: {dingtalk['if_post']}"
             if email['sender_email'] != '':
-                if_post = if_post + f"\n    邮箱: {email['if_post']}"
+                if_post = if_post + f"\n邮箱: {email['if_post']}"
             if webhook['webhook1'] != '':
-                if_post = if_post + f"\n    webhook: {webhook['if_post']}"
+                if_post = if_post + f"\nwebhook: {webhook['if_post']}"
             
             
-            if feishu['if_post'] == 'True':
+            if feishu['if_post'] == '成功':
                 try:
                     sendfeishu(old_ip, new_ip, feishu['webhook'], now_time, if_post, feishu['user_id'], feishu["all_user"])
                     logger.info("飞书消息发送成功")
                 except Exception as e:
                     logger.error(f"飞书发送失败: {str(e)}")
             
-            if dingtalk['if_post'] == 'True':
+            if dingtalk['if_post'] == '成功':
                 try:
                     dingtalk_robot(old_ip, new_ip, dingtalk['webhook'], dingtalk['secret'], dingtalk['at_all'], now_time, if_post)
                     logger.info("钉钉消息发送成功")
@@ -125,7 +125,7 @@ async def send_message():
 
 
             # 在发送邮件部分修改（捕获详细错误）
-            if email['if_post'] == 'True':
+            if email['if_post'] == '成功':
                 try:
                     send_success, send_msg = mail(
                         old_ip, new_ip, email["sender_email"], email["sender_pass"],
@@ -143,13 +143,12 @@ async def send_message():
             
             
             
-            if webhook['if_post'] == 'True' and 'webhook1' in webhook:
+            if webhook['if_post'] == '成功' and 'webhook1' in webhook:
                 secret_key = webhook.get('secret_key', '')
                 webhook_p(old_ip, new_ip, webhook['webhook1'], now_time, if_post, secret_key if secret_key else None)
     
     print(f"休眠 {slp_time['sleeptime']} 秒")
     # 将time.sleep改为异步等待
-    await asyncio.sleep(int(slp_time["sleeptime"]))
 
 # 应用启动时添加定时任务
 @app.on_event('startup')

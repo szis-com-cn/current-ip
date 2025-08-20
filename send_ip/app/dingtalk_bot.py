@@ -45,13 +45,19 @@ def test_dingtalk_connection(webhook, secret):
 def dingtalk_robot(old_ip, new_ip, webhook, secret, at_all, now_time, if_post):
     """钉钉发送函数：确保格式正确"""
     try:
+        if_post = if_post.lstrip('\n')
+        lines = if_post.splitlines()
+        bold_lines = [f"**{line}**" for line in lines]
+        markdown_output = "  \n".join(bold_lines)
+        
         dingding_bot = DingtalkChatbot(webhook, secret)
         dingding_bot.send_markdown(
             title='公网IP变动说明',
             text=f'### **当前公网IP地址为:{new_ip}**\n'  
                 f'### **上一个公网IP地址为:{old_ip}**\n'
                 f'**发送时间:  {now_time}**\n\n'
-                f'**通知结果:  {if_post}**\n\n',
+                f'**通知结果:**  \n\n'
+                f'{markdown_output}\n',
             is_at_all=at_all
         )
         return True
