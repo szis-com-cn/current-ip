@@ -1,6 +1,11 @@
 # 使用Python 3.12作为基础镜像
 FROM python:3.12-slim
 
+#定义时区参数
+ENV TZ=Asia/Shanghai
+#设置时区
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo '$TZ' > /etc/timezone
+
 # 设置工作目录
 WORKDIR /app
 

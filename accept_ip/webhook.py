@@ -10,6 +10,9 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
+# 导入加密模块
+from crypto_utils import CryptoManager, AuthenticationManager
+
 # 加载 .env 文件
 load_dotenv()
 
@@ -21,25 +24,33 @@ class Config:
     """配置管理类，从 .env 文件读取配置"""
     def __init__(self):
         # 日志配置
-        self.LOG_FILE = os.getenv('LOG_FILE', '/app/logs/webhook.log')
-        self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-        self.LOG_MAX_SIZE = int(os.getenv('LOG_MAX_SIZE', '10485760'))  # 10MB
-        self.LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', '5'))
+        self.log_file = os.getenv('log_file', '/app/logs/webhook.log')
+        self.log_level = os.getenv('log_level', 'INFO')
+        self.log_max_size = int(os.getenv('log_max_size', '10485760'))  # 10MB
+        self.log_backup_count = int(os.getenv('log_backup_count', '5'))
         
         # Nginx 配置
-        self.NGINX_CONFIG_PATH = os.getenv('NGINX_CONFIG_PATH', '/etc/nginx/conf.d/allowed_ips.conf')
-        self.NGINX_RELOAD_METHOD = os.getenv('NGINX_RELOAD_METHOD', 'external')  # container|external|command
-        self.NGINX_CONTAINER_NAME = os.getenv('NGINX_CONTAINER_NAME', 'nginx')
-        self.NGINX_RELOAD_COMMAND = os.getenv('NGINX_RELOAD_COMMAND', 'nginx -s reload')
+        self.nginx_config_path = os.getenv('nginx_config_path', '/etc/nginx/conf.d/allowed_ips.conf')
+        self.nginx_reload_method = os.getenv('nginx_reload_method', 'external')  # container|external|command
+        self.nginx_container_name = os.getenv('nginx_container_name', 'nginx')
+        self.nginx_reload_command = os.getenv('nginx_reload_command', 'nginx -s reload')
+        
+        # 加密配置
+        self.secret_key = os.getenv('secret_key', '')  # 为空则禁用加密
+        self.encryption_enabled = bool(self.secret_key.strip())
+        self.max_timestamp_age = int(os.getenv('max_timestamp_age', '300'))  # 5分钟
 
 # 初始化配置
 config = Config()
+
+# 初始化身份验证管理器  
+auth_manager = AuthenticationManager(config.secret_key if config.encryption_enabled else None)
 
 # 日志设置
 def get_logger(name: str) -> logging.Logger:
     """获取配置好的 logger"""
     logger = logging.getLogger(name)
-    logger.setLevel(getattr(logging, config.LOG_LEVEL))
+    logger.setLevel(getattr(logging, config.log_level))
     
     if not logger.handlers:
         formatter = logging.Formatter(
@@ -47,13 +58,13 @@ def get_logger(name: str) -> logging.Logger:
         )
         
         # 创建日志目录
-        os.makedirs(os.path.dirname(config.LOG_FILE), exist_ok=True)
+        os.makedirs(os.path.dirname(config.log_file), exist_ok=True)
         
         # 文件处理器
         file_handler = RotatingFileHandler(
-            config.LOG_FILE,
-            maxBytes=config.LOG_MAX_SIZE,
-            backupCount=config.LOG_BACKUP_COUNT
+            config.log_file,
+            maxBytes=config.log_max_size,
+            backupCount=config.log_backup_count
         )
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
@@ -62,7 +73,7 @@ def get_logger(name: str) -> logging.Logger:
 
 logger = get_logger(__name__)
 
-class IPWhitelistManager:
+class IpWhitelistManager:
     """IP 白名单数据模型"""
     def __init__(self):
         self.allowed_ips = set()
@@ -113,8 +124,12 @@ class WebhookData(BaseModel):
     text: Optional[str] = None
     content: Optional[str] = None
     notification_result: Optional[str] = None
+    # 加密数据字段
+    encrypted_data: Optional[str] = None
+    signature: Optional[str] = None
+    encryption_enabled: Optional[bool] = None
 
-class NginxIPManager:
+class NginxIpManager:
     """Nginx IP地址管理器，用于处理IP地址更新和Nginx配置"""
     
     def __init__(self, config_path=None):
@@ -124,9 +139,9 @@ class NginxIPManager:
         Args:
             config_path (str): Nginx配置文件路径
         """
-        self.nginx_config_path = config_path or config.NGINX_CONFIG_PATH
+        self.nginx_config_path = config_path or config.nginx_config_path
         self.logger = logging.getLogger(__name__)
-        self.whitelist_manager = IPWhitelistManager()
+        self.whitelist_manager = IpWhitelistManager()
         self._load_existing_ips()
     
     def _load_existing_ips(self):
@@ -308,15 +323,15 @@ class NginxIPManager:
         根据配置的方法重载Nginx服务
         """
         try:
-            if config.NGINX_RELOAD_METHOD == 'container':
+            if config.nginx_reload_method == 'container':
                 return self._reload_nginx_container()
-            elif config.NGINX_RELOAD_METHOD == 'command':
+            elif config.nginx_reload_method == 'command':
                 return self._reload_nginx_command()
-            elif config.NGINX_RELOAD_METHOD == 'external':
-                self.logger.info("使用外部Nginx容器模式重载")
-                return self._reload_nginx_container()
+            elif config.nginx_reload_method == 'external':
+                self.logger.info("使用外部Nginx，配置已更新（未在容器内执行重载）")
+                return True
             else:
-                self.logger.error(f"不支持的Nginx重载方法: {config.NGINX_RELOAD_METHOD}")
+                self.logger.error(f"不支持的Nginx重载方法: {config.nginx_reload_method}")
                 return False
         except Exception as e:
             self.logger.error(f"重载Nginx时发生错误: {str(e)}")
@@ -324,7 +339,7 @@ class NginxIPManager:
     
     def _reload_nginx_container(self):
         """通过Docker容器重载Nginx"""
-        nginx_container_name = config.NGINX_CONTAINER_NAME
+        nginx_container_name = config.nginx_container_name
         
         try:
             # 检查Nginx配置文件是否正确
@@ -359,12 +374,12 @@ class NginxIPManager:
         """通过自定义命令重载Nginx"""
         try:
             reload_result = subprocess.run(
-                config.NGINX_RELOAD_COMMAND.split(),
+                config.nginx_reload_command.split(),
                 capture_output=True, text=True, timeout=10
             )
             
             if reload_result.returncode == 0:
-                self.logger.info(f"Nginx重载成功: {config.NGINX_RELOAD_COMMAND}")
+                self.logger.info(f"Nginx重载成功: {config.nginx_reload_command}")
                 return True
             else:
                 self.logger.error(f"Nginx重载失败: {reload_result.stderr}")
@@ -379,21 +394,21 @@ class NginxIPManager:
 
     def get_nginx_status(self):
         """获取Nginx服务状态信息 - 仅显示重载方式信息"""
-        if config.NGINX_RELOAD_METHOD == 'external':
-            return {'status': 'external', 'message': f'使用外部Nginx服务 ({config.NGINX_CONTAINER_NAME})'}
+        if config.nginx_reload_method == 'external':
+            return {'status': 'external', 'message': f'使用外部Nginx服务 ({config.nginx_container_name})'}
         
-        if config.NGINX_RELOAD_METHOD == 'container':
-            return {'status': 'container', 'message': f'使用容器重载方式 ({config.NGINX_CONTAINER_NAME})'}
+        if config.nginx_reload_method == 'container':
+            return {'status': 'container', 'message': f'使用容器重载方式 ({config.nginx_container_name})'}
         
         # 对于command方法
-        return {'status': 'command', 'message': f'使用自定义命令重载方式 ({config.NGINX_RELOAD_COMMAND})'}
+        return {'status': 'command', 'message': f'使用自定义命令重载方式 ({config.nginx_reload_command})'}
 
 
 @app.get('/health')
 async def health_check():
     """健康检查端点"""
     # 获取Nginx状态信息
-    manager = NginxIPManager()
+    manager = NginxIpManager()
     nginx_status = manager.get_nginx_status()
     
     # 记录Nginx状态信息到日志
@@ -403,12 +418,13 @@ async def health_check():
         "status": "healthy", 
         "service": "webhook",
         "nginx_status": nginx_status,
+        "encryption_enabled": config.encryption_enabled,
         "timestamp": datetime.utcnow().isoformat()
     }, status_code=200)
 
 @app.post('/webhook')
 async def webhook(request: Request):
-    """Webhook 接收端点，处理明文数据"""
+    """Webhook 接收端点，支持加密和明文数据"""
     try:
         logger.info(f"接收到请求: {request.method} {request.url}")
         
@@ -419,17 +435,32 @@ async def webhook(request: Request):
             raise HTTPException(status_code=415, detail="invalid content type, expected application/json")
 
         # 获取并验证JSON数据
-        data = await request.json()
-        if not data:
+        raw_data = await request.json()
+        if not raw_data:
             logger.warning("接收到空的JSON数据")
             raise HTTPException(status_code=400, detail="empty json data")
 
+        # 身份验证
+        if not auth_manager.verify_request_authentication(dict(request.headers)):
+            logger.warning("身份验证失败")
+            raise HTTPException(status_code=401, detail="authentication failed")
+
+        # 处理请求数据（解密或明文）
+        is_encrypted, processed_data, error_msg = auth_manager.process_request_data(raw_data)
+        
+        if error_msg:
+            logger.error(f"数据处理失败: {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        # 记录处理模式
+        mode = "加密" if is_encrypted else "明文"
+        logger.info(f"接收到{mode}Webhook数据: {processed_data}")
+
         # 处理Webhook数据
-        logger.info(f"接收到的Webhook数据: {data}")
-        result = process_webhook_data(data)
+        result = process_webhook_data(processed_data)
 
         # 获取Nginx状态信息
-        manager = NginxIPManager()
+        manager = NginxIpManager()
         nginx_status = manager.get_nginx_status()
         
         # 记录Nginx状态信息到日志
@@ -438,6 +469,7 @@ async def webhook(request: Request):
         response_body = {
             'status': 'success',
             'nginx_status': nginx_status,
+            'encryption_mode': mode,
             'timestamp': datetime.utcnow().isoformat()
         }
         if isinstance(result, dict):
@@ -456,14 +488,14 @@ async def webhook(request: Request):
 def process_webhook_data(data):
     """处理Webhook数据的函数，提取IP地址并更新Nginx配置"""
     # 创建Nginx IP管理器实例
-    nginx_manager = NginxIPManager()
+    nginx_manager = NginxIpManager()
     
     try:
         # 跳过测试请求，不记录警告
         if isinstance(data, dict) and data.get('type') == 'connection_test':
             return {'message': '连接测试请求，已跳过处理'}
         
-        # 提取IP地址（明文处理）
+        # 提取IP地址
         current_ip = nginx_manager.extract_ip_from_data(data)
         
         if current_ip:
@@ -500,4 +532,9 @@ def process_webhook_data(data):
 
 if __name__ == '__main__':
     import uvicorn
+    
+    # 记录启动信息
+    encryption_status = "启用" if config.encryption_enabled else "禁用"
+    logger.info(f"服务启动 - 加密功能: {encryption_status}")
+    
     uvicorn.run(app, host='0.0.0.0', port=5000, log_level='info')
